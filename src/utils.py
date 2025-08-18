@@ -47,7 +47,7 @@ def read_docx_file(file_path: str) -> str:
 def read_file(file_path: str) -> str:
     """Read content from a file based on its extension."""
     _, ext = os.path.splitext(file_path.lower())
-    if ext == '.txt':
+    if (ext == '.txt') or (ext == '.md'):
         return read_text_file(file_path)
     elif ext == '.pdf':
         return read_pdf_file(file_path)

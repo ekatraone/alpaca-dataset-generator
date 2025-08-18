@@ -26,7 +26,7 @@ def load_input_data(input_folder: str) -> List[str]:
             futures = []
             for root, _, files in os.walk(input_folder):
                 for file in files:
-                    if file.lower().endswith(('.txt', '.pdf', '.docx')):
+                    if file.lower().endswith(('.txt', '.md', '.pdf', '.docx')):
                         file_path = os.path.join(root, file)
                         futures.append(executor.submit(process_file, file_path))
             
