@@ -52,7 +52,7 @@ def parse_args() -> argparse.Namespace:
         "--device",
         choices=["cpu", "cuda"],
         default=None,
-        help="Override device selection (default auto-detect).",
+        help="Override device selection (default auto-detects CUDA if available, else CPU).",
     )
     return parser.parse_args()
 
@@ -65,9 +65,11 @@ def apply_overrides(args: argparse.Namespace) -> None:
     CONFIG["batch_size"] = args.batch_size
     CONFIG["max_workers"] = args.max_workers
     if args.device:
-        CONFIG["device"] = torch.device(
-            "cuda" if args.device == "cuda" and torch.cuda.is_available() else "cpu"
-        )
+        if args.device == "cuda" and not torch.cuda.is_available():
+            print("Requested CUDA but no CUDA device was detected. Falling back to CPU.")
+            CONFIG["device"] = torch.device("cpu")
+        else:
+            CONFIG["device"] = torch.device(args.device)
 
 
 def ensure_output_dirs() -> None:
