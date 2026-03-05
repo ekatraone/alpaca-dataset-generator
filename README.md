@@ -87,8 +87,8 @@ Defaults live in `src/config.py` and can be overridden at runtime via CLI flags:
 
 ```bash
 python src/main.py \
-  --num_examples 200 \
-  --input-folder data/input \
+  --num-examples 200 \
+  --input-folder custom_data/input \
   --output-file output/raw_dataset.jsonl \
   --validated-output-file output/validated_dataset.jsonl \
   --device cpu
