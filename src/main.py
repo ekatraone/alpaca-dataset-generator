@@ -1,5 +1,6 @@
 import argparse
 import os
+import sys
 
 import torch
 
@@ -66,7 +67,10 @@ def apply_overrides(args: argparse.Namespace) -> None:
     CONFIG["max_workers"] = args.max_workers
     if args.device:
         if args.device == "cuda" and not torch.cuda.is_available():
-            print("Requested CUDA but no CUDA device was detected. Falling back to CPU.")
+            print(
+                "Requested CUDA but no CUDA device was detected. Falling back to CPU.",
+                file=sys.stderr,
+            )
             CONFIG["device"] = torch.device("cpu")
         else:
             CONFIG["device"] = torch.device(args.device)
@@ -78,6 +82,7 @@ def ensure_output_dirs() -> None:
         directory = os.path.dirname(path)
         if directory:
             os.makedirs(directory, exist_ok=True)
+        # If directory is empty, the output is intended for the current working directory.
 
 
 def main():
