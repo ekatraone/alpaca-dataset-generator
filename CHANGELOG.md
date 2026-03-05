@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Command-line flags to override configuration (paths, counts, device) without editing source files.
+
+### Changed
+- Updated default paths and batch sizes in configuration for sensible out-of-the-box runs.
+- README now documents CLI overrides and current defaults.
+
 ## [1.0.0] - 2024-07-02
 
 ### Added
@@ -27,4 +34,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 ### Security
-
