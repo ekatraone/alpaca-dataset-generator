@@ -82,7 +82,7 @@ def ensure_output_dirs() -> None:
         directory = os.path.dirname(path)
         if directory:
             os.makedirs(directory, exist_ok=True)
-        # If directory is empty, the file will be written to the current working directory (no directory creation needed).
+        # If directory is an empty string (no directory component), the file will be written to the current working directory (no directory creation needed).
 
 
 def main():

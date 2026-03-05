@@ -28,7 +28,7 @@ CONFIG = {
     "min_output_length": 50,
     "min_similarity_threshold": 0.3,
     "min_explanation_word_count": 30,
-    "min_learning_path_stepspath_steps": 3,
+    "min_learning_path_steps": 3,
     "min_quiz_options": 4,
     "difficulty_keywords": ["easy", "medium", "difficult", "challenging"],
     # Instruction types for dataset generation
