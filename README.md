@@ -69,28 +69,32 @@ python -m nltk.downloader punkt stopwords
 
 ## Configuration
 
-Open `src/config.py` and adjust the settings as needed:
+Defaults live in `src/config.py` and can be overridden at runtime via CLI flags:
 
-- `input_folder`: Path to your input data folder (default: 'data/input')
-- `output_file`: Path for the raw output file (default: 'output/raw_dataset.jsonl')
-- `validated_output_file`: Path for the validated output file (default: 'output/validated_dataset.jsonl')
-- `num_examples`: Number of examples to generate
-- `batch_size`: Batch size for processing
-- `max_workers`: Number of worker threads for data loading
+- `input_folder`: Path to your input data folder (default: `data/input`)
+- `output_file`: Path for the raw output file (default: `output/raw_dataset.jsonl`)
+- `validated_output_file`: Path for the validated output file (default: `output/validated_dataset.jsonl`)
+- `num_examples`: Number of examples to generate (default: `1000`)
+- `batch_size`: Batch size for processing (default: `8`)
+- `max_workers`: Number of worker threads for data loading (default: `2`)
+- `device`: Auto-detected (CUDA if available), override with `--device cpu` or `--device cuda`
 
 ## Usage
 
-1. Place your input files (.txt, .pdf, .docx) in the `data/input/` directory.
+1. Place your input files (.txt, .pdf, .docx) in the `data/input/` directory (or pass `--input-folder` to point elsewhere).
 
-2. Run the script:
+2. Run the script, overriding defaults as needed:
 
 ```bash
-python src/main.py --num_examples 1000
+python src/main.py \
+  --num-examples 200 \
+  --input-folder custom_data/input \
+  --output-file output/raw_dataset.jsonl \
+  --validated-output-file output/validated_dataset.jsonl \
+  --device cpu
 ```
 
-   * `--num_examples`: Number of examples to generate (default: 1000)
-
-3. The script will generate two files in the `output/` directory:
+3. The script will generate two files in the `output/` directory (creating the folder if it does not exist):
    - `raw_dataset.jsonl`: Contains all generated examples
    - `validated_dataset.jsonl`: Contains only the examples that passed validation
 
