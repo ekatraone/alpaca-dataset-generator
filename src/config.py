@@ -14,6 +14,15 @@ CONFIG = {
         'sentiment': 'distilbert-base-uncased-finetuned-sst-2-english',
         'sentence': 'all-MiniLM-L6-v2'
     },
+    # API backend settings (used when --backend api is passed)
+    # Override any of these via CLI flags or environment variables
+    'api_base_url': 'https://openrouter.ai/api/v1',
+    'api_model': 'meta-llama/llama-3.1-8b-instruct:free',
+    'api_temperature': 0.8,
+    'api_max_tokens': 200,
+    'api_max_retries': 4,
+    'api_retry_delay': 2,  # seconds; doubles on each retry
+
     # Text chunking parameters
     'chunk_size': 1500,       # target max characters per chunk
     'chunk_overlap': 200,     # overlap between consecutive chunks

@@ -1,14 +1,14 @@
 import random
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from tqdm import tqdm
 import torch
 from torch.utils.data import DataLoader, Dataset
 from utils import generate_gpt2_output, generate_t5_output, extract_keywords, preprocess_text
 from config import CONFIG
 
+
 class TextDataset(Dataset):
     def __init__(self, texts, instructions):
-        # Preprocess texts when loading to ensure they're within token limits
         self.texts = [preprocess_text(text) for text in texts]
         self.instructions = instructions
 
@@ -20,7 +20,8 @@ class TextDataset(Dataset):
         instruction_type, instruction = random.choice(self.instructions)
         return text, instruction_type, instruction
 
-def generate_dataset(input_texts: List[str], models: Dict) -> List[Dict[str, Any]]:
+
+def generate_dataset(input_texts: List[str], models: Dict, backend=None) -> List[Dict[str, Any]]:
     instructions = [
         ("summarize",
          "Provide a concise one-sentence summary of the following text.\n\n"
@@ -66,14 +67,18 @@ def generate_dataset(input_texts: List[str], models: Dict) -> List[Dict[str, Any
     ]
 
     dataset = TextDataset(input_texts, instructions)
-    dataloader = DataLoader(dataset, batch_size=CONFIG['batch_size'], shuffle=True, num_workers=CONFIG['max_workers'])
+    dataloader = DataLoader(
+        dataset,
+        batch_size=CONFIG['batch_size'],
+        shuffle=True,
+        num_workers=CONFIG['max_workers'],
+    )
 
     examples = []
-    
     with tqdm(total=CONFIG['num_examples'], desc="Generating examples", unit="example") as pbar:
         for batch in dataloader:
-            texts, instruction_types, instructions = batch
-            batch_examples = generate_batch(models, texts, instruction_types, instructions)
+            texts, instruction_types, batch_instructions = batch
+            batch_examples = generate_batch(models, texts, instruction_types, batch_instructions, backend)
             examples.extend(batch_examples)
             pbar.update(len(batch_examples))
             if len(examples) >= CONFIG['num_examples']:
@@ -81,32 +86,61 @@ def generate_dataset(input_texts: List[str], models: Dict) -> List[Dict[str, Any
 
     return examples[:CONFIG['num_examples']]
 
-def generate_batch(models: Dict, texts: List[str], instruction_types: List[str], instructions: List[str]) -> List[Dict[str, Any]]:
-    batch_examples = []
-    print(f"Generating batch of {len(texts)} examples")
-    for text, instruction_type, instruction in zip(texts, instruction_types, instructions):
-        if instruction_type == "summarize":
-            output = generate_t5_output(models["t5_tokenizer"], models["t5_model"], "summarize", text, CONFIG['device'])
-        elif instruction_type == "paraphrase":
-            output = generate_t5_output(models["t5_tokenizer"], models["t5_model"], "paraphrase", text, CONFIG['device'])
-        elif instruction_type == "keyword":
-            keywords = extract_keywords(text)
-            output = ", ".join(keywords)
-        elif instruction_type == "sentiment":
-            truncated_text = text[:1000]  # Approximate truncation to stay under 512 tokens
-            sentiment = models["sentiment_pipeline"](truncated_text)[0]
-            explanation = generate_gpt2_output(models["gpt2_tokenizer"], models["gpt2_model"], f"The text \"{truncated_text[:200]}\" has {sentiment['label']} sentiment because", CONFIG['device'])
-            output = f"{sentiment['label'].capitalize()}. {explanation}"
-        else:
-            # instruction already contains the few-shot prefix; append the actual text as the new case
-            prompt = f"{instruction}\nText: {text}\nOutput:"
-            output = generate_gpt2_output(models["gpt2_tokenizer"], models["gpt2_model"], prompt, CONFIG['device'])
 
+def generate_batch(
+    models: Dict,
+    texts: List[str],
+    instruction_types: List[str],
+    instructions: List[str],
+    backend=None,
+) -> List[Dict[str, Any]]:
+    batch_examples = []
+
+    for text, instruction_type, instruction in zip(texts, instruction_types, instructions):
+        output = _generate_output(models, backend, instruction_type, instruction, text)
         batch_examples.append({
             "instruction": instruction,
             "input": text,
             "output": output,
-            "instruction_type": instruction_type
+            "instruction_type": instruction_type,
         })
 
     return batch_examples
+
+
+def _generate_output(models, backend, instruction_type: str, instruction: str, text: str) -> str:
+    """Route generation to the appropriate backend / model."""
+
+    # ---- API backend: single unified call for everything ----
+    if backend is not None and backend.is_api():
+        if instruction_type == "sentiment":
+            return backend.generate_sentiment(text[:1000])
+        prompt = f"{instruction}\nText: {text}\nOutput:"
+        return backend.generate(prompt, max_tokens=CONFIG.get('api_max_tokens', 200))
+
+    # ---- Local backend: existing model routing ----
+    if instruction_type == "summarize":
+        return generate_t5_output(
+            models["t5_tokenizer"], models["t5_model"], "summarize", text, CONFIG['device']
+        )
+    if instruction_type == "paraphrase":
+        return generate_t5_output(
+            models["t5_tokenizer"], models["t5_model"], "paraphrase", text, CONFIG['device']
+        )
+    if instruction_type == "keyword":
+        return ", ".join(extract_keywords(text))
+    if instruction_type == "sentiment":
+        truncated = text[:1000]
+        sentiment = models["sentiment_pipeline"](truncated)[0]
+        explanation = generate_gpt2_output(
+            models["gpt2_tokenizer"], models["gpt2_model"],
+            f"The text \"{truncated[:200]}\" has {sentiment['label']} sentiment because",
+            CONFIG['device'],
+        )
+        return f"{sentiment['label'].capitalize()}. {explanation}"
+
+    # title, question — GPT-2 with few-shot prompt
+    prompt = f"{instruction}\nText: {text}\nOutput:"
+    return generate_gpt2_output(
+        models["gpt2_tokenizer"], models["gpt2_model"], prompt, CONFIG['device']
+    )
