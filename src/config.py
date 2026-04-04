@@ -14,6 +14,10 @@ CONFIG = {
         'sentiment': 'distilbert-base-uncased-finetuned-sst-2-english',
         'sentence': 'all-MiniLM-L6-v2'
     },
+    # Text chunking parameters
+    'chunk_size': 1500,       # target max characters per chunk
+    'chunk_overlap': 200,     # overlap between consecutive chunks
+
     # Text processing parameters
     'keyword_count': 5,
     
@@ -29,6 +33,7 @@ CONFIG = {
     'min_word_count': 10,
     'min_output_length': 50,
     'min_similarity_threshold': 0.3,
+    'dedup_threshold': 0.95,  # cosine similarity above which outputs are considered duplicates
     'min_explanation_word_count': 30,
     'min_learning_path_steps': 3,
     'min_quiz_options': 4,
