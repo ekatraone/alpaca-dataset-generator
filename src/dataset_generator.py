@@ -22,12 +22,47 @@ class TextDataset(Dataset):
 
 def generate_dataset(input_texts: List[str], models: Dict) -> List[Dict[str, Any]]:
     instructions = [
-        ("summarize", "Provide a concise one-sentence summary of the following text:"),
-        ("keyword", "Extract 3-5 main keywords or key phrases from the following text:"),
-        ("title", "Generate a short, engaging title for the following text:"),
-        ("sentiment", "Analyze the sentiment of the following text. Classify it as positive, negative, or neutral, and briefly explain your reasoning:"),
-        ("question", "Generate a thought-provoking question based on the main idea of the following text:"),
-        ("paraphrase", "Rewrite the following text in your own words, maintaining its core meaning:"),
+        ("summarize",
+         "Provide a concise one-sentence summary of the following text.\n\n"
+         "Example:\n"
+         "Text: The mitochondria generate energy for the cell by converting nutrients into ATP through a process called cellular respiration. This process requires oxygen and produces carbon dioxide as a byproduct.\n"
+         "Summary: Mitochondria produce ATP — the cell's energy currency — by converting nutrients through oxygen-dependent cellular respiration.\n\n"
+         "Now summarize:"),
+
+        ("keyword",
+         "Extract 3-5 main keywords or key phrases from the following text. Return them as a comma-separated list.\n\n"
+         "Example:\n"
+         "Text: Deep learning models use multiple layers of artificial neurons to learn hierarchical representations of data, enabling breakthroughs in image recognition and natural language processing.\n"
+         "Keywords: deep learning, artificial neurons, hierarchical representations, image recognition, natural language processing\n\n"
+         "Now extract keywords from:"),
+
+        ("title",
+         "Generate a short, engaging title (5-8 words) for the following text.\n\n"
+         "Example:\n"
+         "Text: Studies show that regular aerobic exercise improves memory, reduces anxiety, and may slow cognitive decline in older adults by promoting neuroplasticity and increasing blood flow to the brain.\n"
+         "Title: How Exercise Rewires and Protects the Brain\n\n"
+         "Now generate a title for:"),
+
+        ("sentiment",
+         "Analyze the sentiment of the following text. Classify it as Positive, Negative, or Neutral, then briefly explain your reasoning in one sentence.\n\n"
+         "Example:\n"
+         "Text: The product arrived two days late and the packaging was damaged, though the item itself worked fine.\n"
+         "Sentiment: Negative. Despite the product functioning correctly, the late delivery and damaged packaging create an overall negative customer experience.\n\n"
+         "Now analyze the sentiment of:"),
+
+        ("question",
+         "Generate one thought-provoking question based on the main idea of the following text. The question should end with a question mark.\n\n"
+         "Example:\n"
+         "Text: Antibiotic resistance is accelerating globally as bacteria evolve faster than new drugs are developed, threatening to make common infections untreatable.\n"
+         "Question: If antibiotic resistance continues to outpace drug development, how should healthcare systems prioritize access to the remaining effective antibiotics?\n\n"
+         "Now generate a question based on:"),
+
+        ("paraphrase",
+         "Rewrite the following text in different words while preserving its core meaning. Do not add new information.\n\n"
+         "Example:\n"
+         "Text: The stock market experienced significant volatility last quarter due to rising interest rates and investor uncertainty about inflation.\n"
+         "Paraphrase: Last quarter's stock market saw sharp fluctuations driven by higher interest rates and widespread investor concern over inflation levels.\n\n"
+         "Now paraphrase:"),
     ]
 
     dataset = TextDataset(input_texts, instructions)
@@ -58,13 +93,13 @@ def generate_batch(models: Dict, texts: List[str], instruction_types: List[str],
             keywords = extract_keywords(text)
             output = ", ".join(keywords)
         elif instruction_type == "sentiment":
-            # Add truncation to handle long texts, limiting to 512 tokens
             truncated_text = text[:1000]  # Approximate truncation to stay under 512 tokens
             sentiment = models["sentiment_pipeline"](truncated_text)[0]
-            explanation = generate_gpt2_output(models["gpt2_tokenizer"], models["gpt2_model"], f"Explain why the sentiment is {sentiment['label']}: ", CONFIG['device'])
+            explanation = generate_gpt2_output(models["gpt2_tokenizer"], models["gpt2_model"], f"The text \"{truncated_text[:200]}\" has {sentiment['label']} sentiment because", CONFIG['device'])
             output = f"{sentiment['label'].capitalize()}. {explanation}"
         else:
-            prompt = f"{instruction}\n\nText: {text}\n\nOutput:"
+            # instruction already contains the few-shot prefix; append the actual text as the new case
+            prompt = f"{instruction}\nText: {text}\nOutput:"
             output = generate_gpt2_output(models["gpt2_tokenizer"], models["gpt2_model"], prompt, CONFIG['device'])
 
         batch_examples.append({
