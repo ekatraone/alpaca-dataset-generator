@@ -1,8 +1,6 @@
 import argparse
-import os
 from data_loader import load_input_data
 from model_setup import setup_models
-from dataset_generator import generate_dataset
 from validation import validate_dataset
 from utils import save_to_jsonl, load_existing_jsonl, append_to_jsonl, deduplicate
 from llm_backend import LLMBackend
@@ -24,6 +22,9 @@ def parse_args():
                         help="Number of examples to generate")
     parser.add_argument("--format", type=str, choices=["alpaca", "sharegpt"], default="alpaca",
                         dest="fmt", help="Output format")
+    parser.add_argument("--mode", type=str, choices=["standard", "edu"], default="standard",
+                        help="'standard': summarize/keyword/title/sentiment/question/paraphrase. "
+                             "'edu': 10 educational task types (explanations, quizzes, analogies...)")
 
     # Backend
     parser.add_argument("--backend", type=str, choices=["local", "api"], default="local",
@@ -36,6 +37,8 @@ def parse_args():
     parser.add_argument("--base-url", type=str, dest="base_url", default=None,
                         help="API base URL (default: https://openrouter.ai/api/v1). "
                              "Override to use OpenAI, a local vLLM/llama-server, etc.")
+    parser.add_argument("--concurrency", type=int, default=None,
+                        help="Parallel requests in API mode (default 8)")
 
     # Chunking
     parser.add_argument("--chunk-size", type=int, dest="chunk_size",
@@ -52,28 +55,32 @@ def parse_args():
     return parser.parse_args()
 
 
+def apply_overrides(args):
+    overrides = {
+        'input_folder': args.input,
+        'output_file': args.output,
+        'validated_output_file': args.validated_output,
+        'num_examples': args.num_examples,
+        'chunk_size': args.chunk_size,
+        'chunk_overlap': args.chunk_overlap,
+        'api_model': args.model,
+        'api_base_url': args.base_url,
+        'api_concurrency': args.concurrency,
+    }
+    for key, value in overrides.items():
+        if value is not None:
+            CONFIG[key] = value
+
+
 def main():
     args = parse_args()
-
-    # Apply CLI overrides to CONFIG
-    if args.input:
-        CONFIG['input_folder'] = args.input
-    if args.output:
-        CONFIG['output_file'] = args.output
-    if args.validated_output:
-        CONFIG['validated_output_file'] = args.validated_output
-    if args.num_examples:
-        CONFIG['num_examples'] = args.num_examples
-    if args.chunk_size:
-        CONFIG['chunk_size'] = args.chunk_size
-    if args.chunk_overlap:
-        CONFIG['chunk_overlap'] = args.chunk_overlap
-    if args.model:
-        CONFIG['api_model'] = args.model
-    if args.base_url:
-        CONFIG['api_base_url'] = args.base_url
-
+    apply_overrides(args)
     output_fmt = args.fmt
+
+    if args.mode == "edu":
+        from edu_dataset_generator import generate_dataset
+    else:
+        from dataset_generator import generate_dataset
 
     # ------------------------------------------------------------------
     # Resume: count already-generated examples
@@ -84,33 +91,15 @@ def main():
         if existing:
             print(f"Resuming: found {len(existing)} existing examples in {CONFIG['output_file']}")
 
-    remaining = CONFIG['num_examples'] - len(existing)
+    target = CONFIG['num_examples']
+    remaining = target - len(existing)
     if remaining <= 0:
-        print(f"Already have {len(existing)} examples — target reached. Nothing to do.")
+        print(f"Already have {len(existing)} examples — target of {target} reached. Nothing to do.")
         print("Run without --resume or increase --num-examples to generate more.")
         return
 
     # ------------------------------------------------------------------
-    # Backend setup
-    # ------------------------------------------------------------------
-    print(f"Backend: {args.backend}")
-    models = setup_models(backend=args.backend)
-
-    if args.backend == 'api':
-        backend = LLMBackend(
-            mode='api',
-            models=models,
-            api_key=args.api_key,
-            model=args.model,
-            base_url=args.base_url,
-        )
-        print(f"API model: {backend._model}")
-        print(f"Endpoint:  {backend._client.base_url}")
-    else:
-        backend = LLMBackend(mode='local', models=models)
-
-    # ------------------------------------------------------------------
-    # Load data + generate
+    # Load data first (cheap) so a bad input path fails before model load
     # ------------------------------------------------------------------
     print("Loading input data...")
     input_texts = load_input_data(CONFIG['input_folder'])
@@ -118,25 +107,35 @@ def main():
         print("No valid input files found. Please check your input folder.")
         return
 
-    CONFIG['num_examples'] = remaining  # generate only what's still needed
-    print(f"Generating {remaining} new examples (target total: {CONFIG['num_examples'] + len(existing)})...")
-    new_examples = generate_dataset(input_texts, models, backend=backend)
+    # ------------------------------------------------------------------
+    # Backend setup
+    # ------------------------------------------------------------------
+    print(f"Backend: {args.backend}  |  Mode: {args.mode}")
+    models = setup_models(backend=args.backend)
+
+    if args.backend == 'api':
+        backend = LLMBackend(mode='api', models=models, api_key=args.api_key,
+                             model=args.model, base_url=args.base_url)
+        print(f"API model: {backend.model_name}")
+        print(f"Endpoint:  {backend.base_url}")
+    else:
+        backend = LLMBackend(mode='local', models=models)
 
     # ------------------------------------------------------------------
-    # Deduplication
+    # Generate
+    # ------------------------------------------------------------------
+    print(f"Generating {remaining} new examples (target total: {target})...")
+    new_examples = generate_dataset(remaining, input_texts, models, backend=backend)
+
+    # ------------------------------------------------------------------
+    # Deduplication (new examples against each other and against existing)
     # ------------------------------------------------------------------
     if not args.no_dedup:
         print("Running semantic deduplication...")
-        all_examples = existing + new_examples
-        all_examples = deduplicate(
-            all_examples,
-            models["sentence_model"],
-            similarity_threshold=CONFIG.get('dedup_threshold', 0.95),
-        )
-        existing_ids = set(id(e) for e in existing)
-        new_examples = [e for e in all_examples if id(e) not in existing_ids]
-    else:
-        all_examples = existing + new_examples
+        combined = deduplicate(existing + new_examples, models["sentence_model"],
+                               similarity_threshold=CONFIG.get('dedup_threshold', 0.95))
+        existing_ids = {id(e) for e in existing}
+        new_examples = [e for e in combined if id(e) not in existing_ids]
 
     # ------------------------------------------------------------------
     # Save raw output
@@ -146,8 +145,8 @@ def main():
         for ex in new_examples:
             append_to_jsonl(ex, CONFIG['output_file'], fmt=output_fmt)
     else:
-        print(f"Saving {len(all_examples)} examples to {CONFIG['output_file']}...")
-        save_to_jsonl(all_examples, CONFIG['output_file'], fmt=output_fmt)
+        print(f"Saving {len(new_examples)} examples to {CONFIG['output_file']}...")
+        save_to_jsonl(new_examples, CONFIG['output_file'], fmt=output_fmt)
 
     # ------------------------------------------------------------------
     # Validate + save validated output
@@ -163,11 +162,10 @@ def main():
         print(f"Saving validated dataset to {CONFIG['validated_output_file']}...")
         save_to_jsonl(validated, CONFIG['validated_output_file'], fmt=output_fmt)
 
-    total_raw = len(existing) + len(new_examples)
-    print(f"\nDone.")
-    print(f"  Backend:            {args.backend}")
-    print(f"  Raw examples:       {total_raw}  →  {CONFIG['output_file']}")
-    print(f"  Validated examples: {len(validated)} new  →  {CONFIG['validated_output_file']}")
+    print("\nDone.")
+    print(f"  Backend / mode:     {args.backend} / {args.mode}")
+    print(f"  Raw examples:       {len(existing) + len(new_examples)}  ->  {CONFIG['output_file']}")
+    print(f"  Validated examples: {len(validated)} new  ->  {CONFIG['validated_output_file']}")
     print(f"  Output format:      {output_fmt}")
 
 

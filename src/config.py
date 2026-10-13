@@ -22,6 +22,7 @@ CONFIG = {
     'api_max_tokens': 200,
     'api_max_retries': 4,
     'api_retry_delay': 2,  # seconds; doubles on each retry
+    'api_concurrency': 8,  # parallel requests in API mode
 
     # Text chunking parameters
     'chunk_size': 1500,       # target max characters per chunk
@@ -46,7 +47,7 @@ CONFIG = {
     'min_explanation_word_count': 30,
     'min_learning_path_steps': 3,
     'min_quiz_options': 4,
-    'difficulty_keywords': ['easy', 'medium', 'difficult', 'challenging'],
+    'difficulty_keywords': ['easy', 'beginner', 'medium', 'intermediate', 'difficult', 'hard', 'advanced', 'challenging'],
     
     # Instruction types for dataset generation
     'instruction_types': [

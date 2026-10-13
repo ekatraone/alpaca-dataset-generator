@@ -3,7 +3,7 @@ import csv
 import re
 import torch
 import os
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from docx import Document
 import PyPDF2
 import nltk
@@ -146,6 +146,15 @@ def read_file(file_path: str) -> str:
 # Text chunking
 # ---------------------------------------------------------------------------
 
+def split_sentences(text: str) -> List[str]:
+    """Whitespace-normalise and split on sentence-ending punctuation; no NLTK data needed."""
+    sentences = []
+    for para in text.split('\n\n'):
+        para = ' '.join(para.split())
+        if para:
+            sentences.extend(s for s in re.split(r'(?<=[.!?])\s+', para) if s.strip())
+    return sentences
+
 def chunk_text(text: str, chunk_size: int = 1500, overlap: int = 200) -> List[str]:
     """
     Split text into overlapping chunks on sentence boundaries.
@@ -162,14 +171,7 @@ def chunk_text(text: str, chunk_size: int = 1500, overlap: int = 200) -> List[st
     Returns:
         List of cleaned text chunks, each within chunk_size characters.
     """
-    # Normalise whitespace
-    paragraphs = [' '.join(p.split()) for p in text.split('\n\n') if p.strip()]
-    sentences = []
-    for para in paragraphs:
-        # Split on sentence-ending punctuation followed by whitespace
-        parts = re.split(r'(?<=[.!?])\s+', para)
-        sentences.extend(p for p in parts if p.strip())
-
+    sentences = split_sentences(text)
     chunks = []
     current = []
     current_len = 0
@@ -208,8 +210,9 @@ def preprocess_text(text: str, max_chars: int = 2000) -> str:
     paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
     return '\n\n'.join([' '.join(p.split()) for p in paragraphs])
 
-def extract_keywords(text: str, n: int = 5) -> List[str]:
-    """Extract the most common keywords from the text."""
+def extract_keywords(text: str, n: Optional[int] = None) -> List[str]:
+    """Extract the most common non-stopword keywords from the text."""
+    n = n or CONFIG['keyword_count']
     stop_words = set(stopwords.words('english'))
     words = [word.lower() for word in text.split() if word.isalnum()]
     word_freq = Counter(word for word in words if word not in stop_words)
@@ -261,33 +264,82 @@ def generate_t5_output(
         outputs = model.generate(input_ids, max_length=max_length, num_return_sequences=1, do_sample=True, top_k=50, top_p=0.95)
     return tokenizer.decode(outputs[0], skip_special_tokens=True)
 
+# ---------------------------------------------------------------------------
+# Output cleaning + validation
+# ---------------------------------------------------------------------------
+
+# Labels used in the few-shot prompts; models frequently echo them back.
+_OUTPUT_LABEL_RE = re.compile(
+    r'^\s*(?:summary|keywords?|title|sentiment|question|paraphrase|output|answer|'
+    r'explanation|example|relation|learning path|assessment|difficulty|misconception|'
+    r'analogy|application)\s*:\s*',
+    re.IGNORECASE,
+)
+
+def clean_output(output: str) -> str:
+    """Strip an echoed prompt label (e.g. 'Summary: ') and surrounding whitespace/quotes."""
+    output = output.strip()
+    output = _OUTPUT_LABEL_RE.sub('', output, count=1)
+    # Drop anything after a model starts a new few-shot case
+    for marker in ('\nText:', '\nConcept:', '\nNow ', '\nExample:'):
+        idx = output.find(marker)
+        if idx > 0:
+            output = output[:idx]
+    return output.strip().strip('"').strip()
+
+def _word_count(text: str) -> int:
+    return len(text.split())
+
 def is_valid_output(
     instruction_type: str,
     output: str,
     input_text: str,
-    sentence_model: SentenceTransformer
+    sentence_model: SentenceTransformer,
 ) -> bool:
-    """Validate the generated output based on instruction type and similarity to input."""
-    if len(output.split()) < 3 or len(output) < 10:
+    """Validate a generated output by generic checks, semantic similarity, and type-specific shape."""
+    if not output:
+        return False
+    words = _word_count(output)
+    if words < 3 or len(output) < 10:
         return False
 
     input_embedding = sentence_model.encode(input_text, convert_to_tensor=True)
     output_embedding = sentence_model.encode(output, convert_to_tensor=True)
     similarity = torch.cosine_similarity(input_embedding, output_embedding, dim=0).item()
-
-    if similarity < 0.3:
+    if similarity < CONFIG['min_similarity_threshold']:
         return False
 
-    if instruction_type == "summarize" and (len(output.split()) > 30 or len(output.split()) < 10):
-        return False
-    if instruction_type == "keyword" and not (3 <= len(output.split(',')) <= 5):
-        return False
-    if instruction_type == "title" and (len(output.split()) > 10 or len(output.split()) < 3):
-        return False
-    if instruction_type == "sentiment" and not any(word in output.lower() for word in ['positive', 'negative', 'neutral']):
-        return False
-    if instruction_type == "question" and not output.endswith('?'):
-        return False
+    lower = output.lower()
+
+    # ---- standard generator types ----
+    if instruction_type == "summarize":
+        return 8 <= words <= 40
+    if instruction_type == "keyword":
+        return 3 <= len([k for k in output.split(',') if k.strip()]) <= 6
+    if instruction_type == "title":
+        return 3 <= words <= 12
+    if instruction_type == "sentiment":
+        return lower.startswith(('positive', 'negative', 'neutral'))
+    if instruction_type == "question":
+        return output.rstrip().endswith('?')
+    if instruction_type == "paraphrase":
+        return words >= 8 and output.strip() != input_text.strip()
+
+    # ---- educational generator types ----
+    if instruction_type == "concept_explanation":
+        return words >= CONFIG['min_explanation_word_count']
+    if instruction_type == "generate_question":
+        return output.rstrip().endswith('?')
+    if instruction_type in ("provide_example", "analogy", "application", "misconception", "concept_relation"):
+        return words >= CONFIG['min_word_count']
+    if instruction_type == "learning_path":
+        steps = re.findall(r'(?m)^\s*(?:\d+[.)]|[-*])\s+\S', output)
+        return len(steps) >= CONFIG['min_learning_path_steps'] or output.count(',') >= CONFIG['min_learning_path_steps']
+    if instruction_type == "quiz_generation":
+        options = re.findall(r'(?mi)^\s*[A-D][.)]\s+\S', output)
+        return len(options) >= CONFIG['min_quiz_options'] and '?' in output
+    if instruction_type == "difficulty_assessment":
+        return any(k in lower for k in CONFIG['difficulty_keywords'])
 
     return True
 
@@ -323,19 +375,37 @@ def save_to_jsonl(data: List[Dict[str, Any]], output_file: str, fmt: str = "alpa
             json.dump(converter(item), f, ensure_ascii=False)
             f.write('\n')
 
+def from_sharegpt(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert a ShareGPT record back to Alpaca format (inverse of to_sharegpt)."""
+    turns = record.get("conversations", [])
+    human = next((t["value"] for t in turns if t.get("from") == "human"), "")
+    gpt = next((t["value"] for t in turns if t.get("from") == "gpt"), "")
+    instruction, _, inp = human.partition("\n\n")
+    return {
+        "instruction": instruction,
+        "input": inp,
+        "output": gpt,
+        "instruction_type": record.get("instruction_type", "unknown"),
+    }
+
 def load_existing_jsonl(file_path: str) -> List[Dict[str, Any]]:
-    """Load existing JSONL records for resume support."""
+    """Load existing JSONL records (Alpaca or ShareGPT) as Alpaca dicts, for resume support."""
     if not os.path.exists(file_path):
         return []
     records = []
     with open(file_path, 'r', encoding='utf-8') as f:
         for line in f:
             line = line.strip()
-            if line:
-                try:
-                    records.append(json.loads(line))
-                except json.JSONDecodeError:
-                    pass
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if "conversations" in rec:
+                rec = from_sharegpt(rec)
+            if "output" in rec:
+                records.append(rec)
     return records
 
 def append_to_jsonl(item: Dict[str, Any], output_file: str, fmt: str = "alpaca"):
@@ -374,21 +444,20 @@ def deduplicate(
 
     outputs = [ex["output"] for ex in examples]
     embeddings = sentence_model.encode(outputs, convert_to_tensor=True, show_progress_bar=True)
+    embeddings = torch.nn.functional.normalize(embeddings.float(), dim=1)
 
-    kept_indices = []
-    kept_embeddings = []
-
-    for i, emb in enumerate(embeddings):
-        if not kept_embeddings:
-            kept_indices.append(i)
-            kept_embeddings.append(emb)
-            continue
-
-        kept_tensor = torch.stack(kept_embeddings)
-        sims = torch.cosine_similarity(emb.unsqueeze(0), kept_tensor, dim=1)
-        if sims.max().item() < similarity_threshold:
-            kept_indices.append(i)
-            kept_embeddings.append(emb)
+    # Greedy pass: keep an item unless it is too similar to something already kept.
+    # Kept embeddings live in a preallocated matrix so each step is one matmul.
+    kept = torch.empty_like(embeddings)
+    kept_indices: List[int] = []
+    for i in range(embeddings.shape[0]):
+        emb = embeddings[i]
+        if kept_indices:
+            max_sim = (kept[:len(kept_indices)] @ emb).max().item()
+            if max_sim >= similarity_threshold:
+                continue
+        kept[len(kept_indices)] = emb
+        kept_indices.append(i)
 
     removed = len(examples) - len(kept_indices)
     print(f"Deduplication: removed {removed} near-duplicates, kept {len(kept_indices)}")

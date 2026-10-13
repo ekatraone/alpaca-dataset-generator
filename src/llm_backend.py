@@ -86,6 +86,14 @@ class LLMBackend:
     def is_api(self) -> bool:
         return self.mode == 'api'
 
+    @property
+    def model_name(self) -> Optional[str]:
+        return self._model if self.mode == 'api' else None
+
+    @property
+    def base_url(self) -> Optional[str]:
+        return str(self._client.base_url) if self.mode == 'api' else None
+
     def generate(self, prompt: str, max_tokens: int = 200) -> str:
         """
         Generate text for the given prompt.
