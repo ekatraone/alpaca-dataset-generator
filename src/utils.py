@@ -12,10 +12,20 @@ from collections import Counter
 from transformers import PreTrainedTokenizer, PreTrainedModel
 from sentence_transformers import SentenceTransformer
 
-nltk.download('stopwords', quiet=True)
-
-# Import CONFIG if it's defined in a separate file
 from config import CONFIG
+
+_STOP_WORDS: Optional[set] = None
+
+def _stop_words() -> set:
+    """Load NLTK stopwords on first use so API-mode runs never need NLTK data."""
+    global _STOP_WORDS
+    if _STOP_WORDS is None:
+        try:
+            _STOP_WORDS = set(stopwords.words('english'))
+        except LookupError:
+            nltk.download('stopwords', quiet=True)
+            _STOP_WORDS = set(stopwords.words('english'))
+    return _STOP_WORDS
 
 # ---------------------------------------------------------------------------
 # File readers
@@ -213,7 +223,7 @@ def preprocess_text(text: str, max_chars: int = 2000) -> str:
 def extract_keywords(text: str, n: Optional[int] = None) -> List[str]:
     """Extract the most common non-stopword keywords from the text."""
     n = n or CONFIG['keyword_count']
-    stop_words = set(stopwords.words('english'))
+    stop_words = _stop_words()
     words = [word.lower() for word in text.split() if word.isalnum()]
     word_freq = Counter(word for word in words if word not in stop_words)
     return [word for word, _ in word_freq.most_common(n)]
@@ -290,58 +300,64 @@ def clean_output(output: str) -> str:
 def _word_count(text: str) -> int:
     return len(text.split())
 
-def is_valid_output(
+def validation_failure(
     instruction_type: str,
     output: str,
     input_text: str,
     sentence_model: SentenceTransformer,
-) -> bool:
-    """Validate a generated output by generic checks, semantic similarity, and type-specific shape."""
+) -> Optional[str]:
+    """
+    Return a short reason the output is invalid, or None if it passes.
+    Checks: generic length, semantic similarity to the input, then a per-type shape rule.
+    """
     if not output:
-        return False
+        return "empty"
     words = _word_count(output)
     if words < 3 or len(output) < 10:
-        return False
+        return "too_short"
 
     input_embedding = sentence_model.encode(input_text, convert_to_tensor=True)
     output_embedding = sentence_model.encode(output, convert_to_tensor=True)
     similarity = torch.cosine_similarity(input_embedding, output_embedding, dim=0).item()
     if similarity < CONFIG['min_similarity_threshold']:
-        return False
+        return "low_similarity"
 
     lower = output.lower()
 
     # ---- standard generator types ----
     if instruction_type == "summarize":
-        return 8 <= words <= 40
+        return None if 8 <= words <= 40 else "summary_length"
     if instruction_type == "keyword":
-        return 3 <= len([k for k in output.split(',') if k.strip()]) <= 6
+        return None if 3 <= len([k for k in output.split(',') if k.strip()]) <= 6 else "keyword_count"
     if instruction_type == "title":
-        return 3 <= words <= 12
+        return None if 3 <= words <= 12 else "title_length"
     if instruction_type == "sentiment":
-        return lower.startswith(('positive', 'negative', 'neutral'))
-    if instruction_type == "question":
-        return output.rstrip().endswith('?')
+        return None if lower.startswith(('positive', 'negative', 'neutral')) else "no_sentiment_label"
+    if instruction_type in ("question", "generate_question"):
+        return None if output.rstrip().endswith('?') else "not_a_question"
     if instruction_type == "paraphrase":
-        return words >= 8 and output.strip() != input_text.strip()
+        return None if words >= 8 and output.strip() != input_text.strip() else "paraphrase_unchanged_or_short"
 
     # ---- educational generator types ----
     if instruction_type == "concept_explanation":
-        return words >= CONFIG['min_explanation_word_count']
-    if instruction_type == "generate_question":
-        return output.rstrip().endswith('?')
+        return None if words >= CONFIG['min_explanation_word_count'] else "explanation_too_short"
     if instruction_type in ("provide_example", "analogy", "application", "misconception", "concept_relation"):
-        return words >= CONFIG['min_word_count']
+        return None if words >= CONFIG['min_word_count'] else "too_few_words"
     if instruction_type == "learning_path":
         steps = re.findall(r'(?m)^\s*(?:\d+[.)]|[-*])\s+\S', output)
-        return len(steps) >= CONFIG['min_learning_path_steps'] or output.count(',') >= CONFIG['min_learning_path_steps']
+        ok = len(steps) >= CONFIG['min_learning_path_steps'] or output.count(',') >= CONFIG['min_learning_path_steps']
+        return None if ok else "too_few_steps"
     if instruction_type == "quiz_generation":
         options = re.findall(r'(?mi)^\s*[A-D][.)]\s+\S', output)
-        return len(options) >= CONFIG['min_quiz_options'] and '?' in output
+        return None if len(options) >= CONFIG['min_quiz_options'] and '?' in output else "quiz_shape"
     if instruction_type == "difficulty_assessment":
-        return any(k in lower for k in CONFIG['difficulty_keywords'])
+        return None if any(k in lower for k in CONFIG['difficulty_keywords']) else "no_difficulty_label"
 
-    return True
+    return None
+
+
+def is_valid_output(instruction_type: str, output: str, input_text: str, sentence_model: SentenceTransformer) -> bool:
+    return validation_failure(instruction_type, output, input_text, sentence_model) is None
 
 # ---------------------------------------------------------------------------
 # Output format conversion

@@ -6,6 +6,7 @@ import utils
 from utils import (
     chunk_text, clean_output, deduplicate, from_sharegpt, is_valid_output,
     load_existing_jsonl, read_file, save_to_jsonl, append_to_jsonl, to_sharegpt,
+    validation_failure,
 )
 
 
@@ -177,6 +178,24 @@ def test_is_valid_output_rejects_low_similarity(fake_model, config):
 
 def test_is_valid_output_rejects_empty(constant_model):
     assert is_valid_output("summarize", "", INPUT, constant_model) is False
+
+
+@pytest.mark.parametrize("itype,output,reason", [
+    ("summarize", "", "empty"),
+    ("summarize", "tiny", "too_short"),
+    ("summarize", "Way too short.", "summary_length"),
+    ("question", "No question mark here at all.", "not_a_question"),
+    ("quiz_generation", "What? A) one B) two", "quiz_shape"),
+    ("sentiment", "Positive. Clearly upbeat text overall.", None),
+])
+def test_validation_failure_reasons(constant_model, itype, output, reason):
+    assert validation_failure(itype, output, INPUT, constant_model) == reason
+
+
+def test_validation_failure_low_similarity(fake_model, config):
+    config['min_similarity_threshold'] = 0.3
+    unrelated = "Quarterly revenue grew because marketing spend increased substantially again."
+    assert validation_failure("summarize", unrelated, INPUT, fake_model) == "low_similarity"
 
 
 # ---------------------------------------------------------------------------

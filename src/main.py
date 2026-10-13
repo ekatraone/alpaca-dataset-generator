@@ -128,19 +128,10 @@ def main():
     new_examples = generate_dataset(remaining, input_texts, models, backend=backend)
 
     # ------------------------------------------------------------------
-    # Deduplication (new examples against each other and against existing)
+    # Raw output: everything generated, untouched
     # ------------------------------------------------------------------
-    if not args.no_dedup:
-        print("Running semantic deduplication...")
-        combined = deduplicate(existing + new_examples, models["sentence_model"],
-                               similarity_threshold=CONFIG.get('dedup_threshold', 0.95))
-        existing_ids = {id(e) for e in existing}
-        new_examples = [e for e in combined if id(e) not in existing_ids]
-
-    # ------------------------------------------------------------------
-    # Save raw output
-    # ------------------------------------------------------------------
-    if args.resume and existing:
+    resuming = args.resume and bool(existing)
+    if resuming:
         print(f"Appending {len(new_examples)} new examples to {CONFIG['output_file']}...")
         for ex in new_examples:
             append_to_jsonl(ex, CONFIG['output_file'], fmt=output_fmt)
@@ -149,12 +140,21 @@ def main():
         save_to_jsonl(new_examples, CONFIG['output_file'], fmt=output_fmt)
 
     # ------------------------------------------------------------------
-    # Validate + save validated output
+    # Validated output: validate, then drop near-duplicates (also against
+    # anything already in the validated file when resuming)
     # ------------------------------------------------------------------
     print("Validating generated examples...")
     validated = validate_dataset(new_examples, models["sentence_model"])
 
-    if args.resume and existing:
+    if not args.no_dedup and validated:
+        print("Running semantic deduplication...")
+        prior = load_existing_jsonl(CONFIG['validated_output_file']) if resuming else []
+        combined = deduplicate(prior + validated, models["sentence_model"],
+                               similarity_threshold=CONFIG.get('dedup_threshold', 0.95))
+        prior_ids = {id(e) for e in prior}
+        validated = [e for e in combined if id(e) not in prior_ids]
+
+    if resuming:
         print(f"Appending {len(validated)} validated examples to {CONFIG['validated_output_file']}...")
         for ex in validated:
             append_to_jsonl(ex, CONFIG['validated_output_file'], fmt=output_fmt)

@@ -1,18 +1,21 @@
+from collections import Counter
 from typing import List, Dict, Any
 from tqdm import tqdm
-from utils import is_valid_output
+from utils import validation_failure
+
 
 def validate_dataset(dataset: List[Dict[str, Any]], sentence_model) -> List[Dict[str, Any]]:
-    validated_dataset = []
-    print(f"Starting validation of {len(dataset)} examples")
-    
-    with tqdm(total=len(dataset), desc="Validating examples", unit="example") as pbar:
-        for i, example in enumerate(dataset):
-            if is_valid_output(example["instruction_type"], example["output"], example["input"], sentence_model):
-                validated_dataset.append(example)
-            else:
-                print(f"Example {i} failed validation")
-            pbar.update(1)
-    
-    print(f"Validation complete. {len(validated_dataset)} out of {len(dataset)} examples passed validation")
-    return validated_dataset
+    """Keep examples that pass validation; print a breakdown of why the rest were dropped."""
+    kept = []
+    reasons = Counter()
+    for example in tqdm(dataset, desc="Validating examples", unit="example"):
+        reason = validation_failure(example["instruction_type"], example["output"], example["input"], sentence_model)
+        if reason is None:
+            kept.append(example)
+        else:
+            reasons[(example["instruction_type"], reason)] += 1
+
+    print(f"Validation: {len(kept)} of {len(dataset)} examples passed")
+    for (itype, reason), n in reasons.most_common():
+        print(f"  dropped {n:>5}  {itype:<22} {reason}")
+    return kept
