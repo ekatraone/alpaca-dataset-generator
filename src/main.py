@@ -29,11 +29,13 @@ def parse_args():
                         dest="fmt", help="Output format")
 
     # Backend
-    parser.add_argument("--backend", type=str, choices=["local", "api"], default="local",
-                        help="Generation backend: 'local' (GPT-2/T5) or 'api' (OpenRouter / any OpenAI-compatible endpoint)")
+    parser.add_argument("--backend", type=str, choices=["local", "api", "legacy"], default="local",
+                        help="Generation backend: 'local' (instruct model, default Qwen2.5-1.5B-Instruct), "
+                             "'api' (OpenRouter / any OpenAI-compatible endpoint) or 'legacy' (GPT-2/T5)")
     parser.add_argument("--model", type=str, default=None,
-                        help="Model slug for API backend (e.g. 'meta-llama/llama-3.1-8b-instruct:free'). "
-                             "Ignored in local mode.")
+                        help="Model name: HF id for --backend local (e.g. Qwen/Qwen2.5-3B-Instruct) "
+                             "or slug for --backend api (e.g. 'meta-llama/llama-3.1-8b-instruct:free'). "
+                             "Ignored for legacy.")
     parser.add_argument("--api-key", type=str, dest="api_key", default=None,
                         help="API key for the endpoint. Falls back to OPENROUTER_API_KEY / OPENAI_API_KEY env vars.")
     parser.add_argument("--base-url", type=str, dest="base_url", default=None,
@@ -90,7 +92,10 @@ def main():
         else:
             CONFIG['device'] = torch.device(args.device)
     if args.model:
-        CONFIG['api_model'] = args.model
+        if args.backend == 'local':
+            CONFIG['local_model'] = args.model
+        else:
+            CONFIG['api_model'] = args.model
     if args.base_url:
         CONFIG['api_base_url'] = args.base_url
 
@@ -134,7 +139,9 @@ def main():
         print(f"API model: {backend._model}")
         print(f"Endpoint:  {backend._client.base_url}")
     else:
-        backend = LLMBackend(mode='local', models=models)
+        backend = LLMBackend(mode=args.backend, models=models)
+        if args.backend == 'local':
+            print(f"Local model: {CONFIG['local_model']}")
 
     # ------------------------------------------------------------------
     # Load data + generate

@@ -14,6 +14,12 @@ CONFIG = {
         "sentiment": "distilbert-base-uncased-finetuned-sst-2-english",
         "sentence": "all-MiniLM-L6-v2",
     },
+    # Local instruct-model backend (default). Any HF chat/instruct model works,
+    # e.g. Qwen/Qwen2.5-0.5B-Instruct (tiny), Qwen/Qwen2.5-3B-Instruct, microsoft/Phi-3.5-mini-instruct.
+    "local_model": "Qwen/Qwen2.5-1.5B-Instruct",
+    "local_max_new_tokens": 200,
+    "local_temperature": 0.7,
+    "local_top_p": 0.9,
     # API backend settings (used when --backend api is passed)
     # Override any of these via CLI flags or environment variables
     "api_base_url": "https://openrouter.ai/api/v1",

@@ -119,3 +119,11 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Backends
+
+| `--backend` | What it uses |
+|---|---|
+| `local` (default) | Local instruct model, `Qwen/Qwen2.5-1.5B-Instruct`. Override with `--model` (e.g. `Qwen/Qwen2.5-0.5B-Instruct` for low memory, `Qwen/Qwen2.5-3B-Instruct` on GPU). |
+| `api` | Any OpenAI-compatible endpoint (OpenRouter by default); see `--api-key`, `--base-url`, `--model`. |
+| `legacy` | Original GPT-2 / T5 / DistilBERT pipeline. |

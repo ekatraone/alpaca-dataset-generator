@@ -12,7 +12,10 @@ from collections import Counter
 from transformers import PreTrainedTokenizer, PreTrainedModel
 from sentence_transformers import SentenceTransformer
 
-nltk.download('stopwords', quiet=True)
+try:
+    nltk.download('stopwords', quiet=True)
+except Exception:
+    pass  # offline: extract_keywords (legacy only) will fail if stopwords are missing
 
 # Import CONFIG if it's defined in a separate file
 from config import CONFIG
@@ -84,8 +87,14 @@ def read_json_file(file_path: str) -> str:
         with open(file_path, 'r', encoding='utf-8') as file:
             content = file.read().strip()
 
-        # Try JSONL first (one JSON object per line)
-        if content.startswith('{'):
+        data = None
+        try:
+            data = json.loads(content)
+        except json.JSONDecodeError:
+            pass
+
+        if data is None:
+            # Not a single JSON document -> treat as JSONL (one object per line)
             for line in content.splitlines():
                 line = line.strip()
                 if not line:
@@ -97,7 +106,6 @@ def read_json_file(file_path: str) -> str:
                     pass
         else:
             # Regular JSON — could be a list or a single object
-            data = json.loads(content)
             if isinstance(data, list):
                 for item in data:
                     chunks.append(_flatten_json(item))
@@ -275,7 +283,7 @@ def is_valid_output(
     output_embedding = sentence_model.encode(output, convert_to_tensor=True)
     similarity = torch.cosine_similarity(input_embedding, output_embedding, dim=0).item()
 
-    if similarity < 0.3:
+    if similarity < CONFIG.get('min_similarity_threshold', 0.3):
         return False
 
     if instruction_type == "summarize" and (len(output.split()) > 30 or len(output.split()) < 10):
@@ -350,6 +358,12 @@ def append_to_jsonl(item: Dict[str, Any], output_file: str, fmt: str = "alpaca")
 # Deduplication
 # ---------------------------------------------------------------------------
 
+def _output_text(ex: Dict[str, Any]) -> str:
+    """Output text of an example in either Alpaca or ShareGPT format."""
+    if "output" in ex:
+        return ex["output"]
+    return ex["conversations"][-1]["value"]
+
 def deduplicate(
     examples: List[Dict[str, Any]],
     sentence_model: SentenceTransformer,
@@ -372,7 +386,7 @@ def deduplicate(
     if not examples:
         return []
 
-    outputs = [ex["output"] for ex in examples]
+    outputs = [_output_text(ex) for ex in examples]
     embeddings = sentence_model.encode(outputs, convert_to_tensor=True, show_progress_bar=True)
 
     kept_indices = []
