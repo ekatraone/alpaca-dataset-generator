@@ -74,17 +74,24 @@ def generate_dataset(input_texts: List[str], models: Dict, backend=None) -> List
         num_workers=CONFIG['max_workers'],
     )
 
+    target = CONFIG['num_examples']
     examples = []
-    with tqdm(total=CONFIG['num_examples'], desc="Generating examples", unit="example") as pbar:
-        for batch in dataloader:
-            texts, instruction_types, batch_instructions = batch
-            batch_examples = generate_batch(models, texts, instruction_types, batch_instructions, backend)
-            examples.extend(batch_examples)
-            pbar.update(len(batch_examples))
-            if len(examples) >= CONFIG['num_examples']:
-                break
+    passes = 0
+    with tqdm(total=target, desc="Generating examples", unit="example") as pbar:
+        while len(examples) < target:
+            if passes:
+                print(f"\nInput exhausted after {len(examples)} examples; "
+                      f"making another pass with new instruction/sampling choices.")
+            for batch in dataloader:
+                texts, instruction_types, batch_instructions = batch
+                batch_examples = generate_batch(models, texts, instruction_types, batch_instructions, backend)
+                examples.extend(batch_examples)
+                pbar.update(len(batch_examples))
+                if len(examples) >= target:
+                    break
+            passes += 1
 
-    return examples[:CONFIG['num_examples']]
+    return examples[:target]
 
 
 def generate_batch(
@@ -94,31 +101,37 @@ def generate_batch(
     instructions: List[str],
     backend=None,
 ) -> List[Dict[str, Any]]:
-    batch_examples = []
+    texts, instruction_types, instructions = list(texts), list(instruction_types), list(instructions)
 
-    for text, instruction_type, instruction in zip(texts, instruction_types, instructions):
-        output = _generate_output(models, backend, instruction_type, instruction, text)
-        batch_examples.append({
-            "instruction": instruction,
-            "input": text,
-            "output": output,
-            "instruction_type": instruction_type,
-        })
+    if backend is not None and not backend.is_legacy():
+        # Local instruct model or API: one prompt per example, generated as a batch
+        prompts = [_build_prompt(backend, t, it, ins) for t, it, ins in zip(texts, instruction_types, instructions)]
+        outputs = backend.generate_batch(prompts, max_tokens=_max_tokens(backend))
+    else:
+        outputs = [
+            _generate_output(models, backend, it, ins, t)
+            for t, it, ins in zip(texts, instruction_types, instructions)
+        ]
 
-    return batch_examples
+    return [
+        {"instruction": ins, "input": t, "output": o, "instruction_type": it}
+        for t, it, ins, o in zip(texts, instruction_types, instructions, outputs)
+    ]
+
+
+def _max_tokens(backend) -> int:
+    return CONFIG.get('api_max_tokens', 200) if backend.is_api() else CONFIG.get('local_max_new_tokens', 200)
+
+
+def _build_prompt(backend, text: str, instruction_type: str, instruction: str) -> str:
+    if instruction_type == "sentiment":
+        return backend.sentiment_prompt(text[:1000])
+    return f"{instruction}\nText: {text}\nOutput:"
 
 
 def _generate_output(models, backend, instruction_type: str, instruction: str, text: str) -> str:
-    """Route generation to the appropriate backend / model."""
+    """Legacy path: route to GPT-2 / T5 / DistilBERT per instruction type."""
 
-    # ---- API backend: single unified call for everything ----
-    if backend is not None and backend.is_api():
-        if instruction_type == "sentiment":
-            return backend.generate_sentiment(text[:1000])
-        prompt = f"{instruction}\nText: {text}\nOutput:"
-        return backend.generate(prompt, max_tokens=CONFIG.get('api_max_tokens', 200))
-
-    # ---- Local backend: existing model routing ----
     if instruction_type == "summarize":
         return generate_t5_output(
             models["t5_tokenizer"], models["t5_model"], "summarize", text, CONFIG['device']
