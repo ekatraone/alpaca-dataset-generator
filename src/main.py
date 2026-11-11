@@ -1,5 +1,8 @@
 import argparse
 import os
+import sys
+
+import torch
 from data_loader import load_input_data
 from model_setup import setup_models
 from dataset_generator import generate_dataset
@@ -16,9 +19,9 @@ def parse_args():
     )
 
     # I/O
-    parser.add_argument("--input", type=str, help="Path to input folder containing source documents")
-    parser.add_argument("--output", type=str, help="Path for the raw output JSONL file")
-    parser.add_argument("--validated-output", type=str, dest="validated_output",
+    parser.add_argument("--input", "--input-folder", type=str, dest="input", help="Path to input folder containing source documents")
+    parser.add_argument("--output", "--output-file", type=str, dest="output", help="Path for the raw output JSONL file")
+    parser.add_argument("--validated-output", "--validated-output-file", type=str, dest="validated_output",
                         help="Path for the validated output JSONL file")
     parser.add_argument("--num-examples", type=int, dest="num_examples",
                         help="Number of examples to generate")
@@ -36,6 +39,14 @@ def parse_args():
     parser.add_argument("--base-url", type=str, dest="base_url", default=None,
                         help="API base URL (default: https://openrouter.ai/api/v1). "
                              "Override to use OpenAI, a local vLLM/llama-server, etc.")
+
+    # Resources
+    parser.add_argument("--batch-size", type=int, dest="batch_size",
+                        help="Batch size for generation")
+    parser.add_argument("--max-workers", type=int, dest="max_workers",
+                        help="Number of worker threads for data loading")
+    parser.add_argument("--device", choices=["cpu", "cuda"], default=None,
+                        help="Override device (default: auto-detect CUDA, else CPU)")
 
     # Chunking
     parser.add_argument("--chunk-size", type=int, dest="chunk_size",
@@ -68,10 +79,26 @@ def main():
         CONFIG['chunk_size'] = args.chunk_size
     if args.chunk_overlap:
         CONFIG['chunk_overlap'] = args.chunk_overlap
+    if args.batch_size:
+        CONFIG['batch_size'] = args.batch_size
+    if args.max_workers:
+        CONFIG['max_workers'] = args.max_workers
+    if args.device:
+        if args.device == "cuda" and not torch.cuda.is_available():
+            print("Requested CUDA but no CUDA device was detected. Falling back to CPU.", file=sys.stderr)
+            CONFIG['device'] = torch.device("cpu")
+        else:
+            CONFIG['device'] = torch.device(args.device)
     if args.model:
         CONFIG['api_model'] = args.model
     if args.base_url:
         CONFIG['api_base_url'] = args.base_url
+
+    # Ensure output directories exist
+    for key in ('output_file', 'validated_output_file'):
+        directory = os.path.dirname(CONFIG[key])
+        if directory:
+            os.makedirs(directory, exist_ok=True)
 
     output_fmt = args.fmt
 
